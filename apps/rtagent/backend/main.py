@@ -42,7 +42,7 @@ from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 from src.pools.connection_manager import ThreadSafeConnectionManager
 from src.pools.session_metrics import ThreadSafeSessionMetrics
-from .src.services import AzureOpenAIClient, CosmosDBMongoCoreManager, AzureRedisManager, SpeechSynthesizer, StreamingSpeechRecognizerFromBytes
+from apps.rtagent.backend.src.services import AzureOpenAIClient, CosmosDBMongoCoreManager, AzureRedisManager, SpeechSynthesizer, StreamingSpeechRecognizerFromBytes
 from src.aoai.client_manager import AoaiClientManager
 from config.app_config import AppConfig
 from config.app_settings import (
@@ -573,3 +573,7 @@ def main():
         port=port,
         reload=False,  # Don't use reload in production
     )
+
+
+if __name__ == "__main__":
+    main()
