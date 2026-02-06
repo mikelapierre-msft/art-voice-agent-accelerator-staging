@@ -23,6 +23,49 @@ logger = get_logger("lifecycle.steps")
 
 
 # ============================================================================
+# Step 0: Transport Plugins (load before core state)
+# ============================================================================
+
+
+def register_transports_step(manager: LifecycleManager, app: FastAPI) -> None:
+    """Register built-in transports and discover external plugins."""
+
+    async def start() -> None:
+        from apps.artagent.backend.registries.transportstore import (
+            discover_plugins,
+            register_transport,
+        )
+        from apps.artagent.backend.voice.transports import (
+            ACSTransportAdapter,
+            BrowserTransportAdapter,
+        )
+
+        # Register built-in transports
+        register_transport("acs", ACSTransportAdapter)
+        register_transport("browser", BrowserTransportAdapter)
+
+        # Discover external plugins via entry_points
+        discovered = discover_plugins()
+        if discovered:
+            logger.info(f"Discovered external transport plugins: {discovered}")
+
+        # Mount plugin-provided FastAPI routers onto the app
+        from apps.artagent.backend.registries.transportstore import get_plugin_routers
+
+        for plugin_router in get_plugin_routers():
+            app.include_router(plugin_router)
+            prefix = getattr(plugin_router, "prefix", "")
+            logger.info("Mounted transport plugin router: %s", prefix or "/")
+
+        # Store available transports in app.state
+        from apps.artagent.backend.registries.transportstore import get_all_transports
+
+        app.state.available_transports = list(get_all_transports().keys())
+
+    manager.add_step("transports", start)
+
+
+# ============================================================================
 # Step 1: Core State (Redis, Connection Manager, Session Manager)
 # ============================================================================
 

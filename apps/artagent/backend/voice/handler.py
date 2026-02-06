@@ -94,6 +94,7 @@ from utils.ml_logging import get_logger
 
 if TYPE_CHECKING:
     from apps.artagent.backend.voice.speech_cascade.orchestrator import CascadeOrchestratorAdapter
+    from apps.artagent.backend.registries.transportstore.protocols import TransportAdapter
 
 logger = get_logger("voice.handler")
 tracer = trace.get_tracer(__name__)
@@ -168,6 +169,7 @@ class VoiceHandlerConfig:
     stream_mode: StreamMode = field(default_factory=lambda: ACS_STREAMING_MODE)
     user_email: str | None = None
     scenario: str | None = None  # Industry scenario (banking, default, etc.)
+    transport_adapter: Any = None  # Optional TransportAdapter for plugin transports
 
 
 # ============================================================================
@@ -229,6 +231,7 @@ class VoiceHandler:
         # Components (not layers)
         self._tts: TTSPlayback | None = None  # Created in factory
         self._orchestrator: CascadeOrchestratorAdapter | None = None
+        self._transport_adapter: TransportAdapter | None = config.transport_adapter
 
         # Thread management (inlined from SpeechCascadeHandler)
         self._speech_queue: asyncio.Queue = asyncio.Queue(maxsize=50)
@@ -490,7 +493,14 @@ class VoiceHandler:
         Browser mode: message loop for WebSocket messages.
 
         For ACS mode, use handle_media_message() instead.
+        
+        If a transport adapter is configured, delegates to run_with_adapter().
         """
+        # Use adapter-based message loop if available
+        if self._transport_adapter is not None:
+            await self.run_with_adapter()
+            return
+
         if self._transport != TransportType.BROWSER:
             raise RuntimeError("run() is only for Browser transport; use handle_media_message() for ACS")
 
@@ -524,6 +534,80 @@ class VoiceHandler:
                     break
 
         finally:
+            await self.stop()
+
+    async def run_with_adapter(self) -> None:
+        """
+        Unified message loop using transport adapter.
+
+        Works for any transport type (ACS, Browser, Genesys, etc.) by receiving
+        normalized TransportMessages from the adapter.
+        """
+        from apps.artagent.backend.registries.transportstore.protocols import MessageKind
+
+        adapter = self._transport_adapter
+        if adapter is None:
+            raise RuntimeError("No transport adapter configured")
+
+        logger.info("[%s] Starting adapter-based message loop (transport=%s)", 
+                    self._session_short, getattr(adapter, 'name', 'unknown'))
+
+        try:
+            await adapter.start()
+
+            while self._running:
+                try:
+                    msg = await adapter.receive_message()
+
+                    if msg.kind == MessageKind.DISCONNECT:
+                        logger.info("[%s] Transport disconnect", self._session_short)
+                        break
+
+                    if msg.kind == MessageKind.AUDIO:
+                        if msg.audio_data:
+                            # Check for barge-in (RMS-based) 
+                            if not msg.metadata.get("silent", False):
+                                self._touch_activity()
+                                if self._browser_barge_in:
+                                    rms = pcm16le_rms(msg.audio_data)
+                                    if rms > BROWSER_SPEECH_RMS_THRESHOLD:
+                                        await self._browser_barge_in.on_speech_detected()
+                            # Feed to STT
+                            self.write_audio(msg.audio_data)
+
+                    elif msg.kind == MessageKind.METADATA:
+                        self._metadata_received = True
+                        logger.info("[%s] Metadata received via adapter", self._session_short)
+
+                    elif msg.kind == MessageKind.STOP:
+                        logger.info("[%s] Stop requested via adapter", self._session_short)
+                        self._running = False
+                        break
+
+                    elif msg.kind == MessageKind.DTMF:
+                        digit = msg.metadata.get("digit")
+                        if digit:
+                            self._touch_activity()
+                        logger.info("[%s] DTMF tone via adapter: %s", self._session_short, digit)
+
+                    elif msg.kind == MessageKind.CONTROL:
+                        # Generic control message - check for text input
+                        raw_text = msg.metadata.get("raw_text")
+                        if raw_text:
+                            await self.send_text_message(raw_text)
+
+                except Exception as e:
+                    if "disconnect" in str(e).lower() or "closed" in str(e).lower():
+                        logger.info("[%s] WebSocket closed", self._session_short)
+                        break
+                    logger.error("[%s] Adapter message loop error: %s", self._session_short, e)
+                    break
+
+        finally:
+            try:
+                await adapter.stop()
+            except Exception as e:
+                logger.debug("[%s] Adapter stop error: %s", self._session_short, e)
             await self.stop()
 
     def _touch_activity(self) -> None:

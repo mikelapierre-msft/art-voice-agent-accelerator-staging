@@ -23,6 +23,7 @@ from apps.artagent.backend.voice import (
     VoiceHandlerConfig,
     VoiceLiveSDKHandler,
 )
+from apps.artagent.backend.voice.transports import ACSTransportAdapter
 from config import ACS_STREAMING_MODE
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.websockets import WebSocketState
@@ -255,12 +256,19 @@ async def _create_media_handler(
 ):
     """Create appropriate media handler based on streaming mode."""
     if stream_mode == StreamMode.MEDIA:
+        # Create ACS transport adapter
+        adapter = ACSTransportAdapter(
+            websocket=websocket,
+            session_id=session_id,
+        )
+        
         config = VoiceHandlerConfig(
             websocket=websocket,
             session_id=session_id,
             transport=TransportType.ACS,
             call_connection_id=call_connection_id,
             stream_mode=stream_mode,
+            transport_adapter=adapter,
         )
         return await VoiceHandler.create(config, websocket.app.state)
     elif stream_mode == StreamMode.VOICE_LIVE:
@@ -312,10 +320,14 @@ async def _process_media_stream(
     disconnect handling with differentiation between normal and abnormal
     disconnections for production monitoring.
 
+    For MEDIA mode with transport adapter, delegates to handler.run_with_adapter()
+    which handles the message loop internally using the normalized TransportMessage format.
+
     Args:
         websocket: WebSocket connection for message processing.
         handler: Media handler instance (VoiceHandler or VoiceLiveSDKHandler).
         call_connection_id: Call connection identifier for logging and tracing.
+        stream_mode: The streaming mode (MEDIA, TRANSCRIPTION, VOICE_LIVE).
 
     Raises:
         WebSocketDisconnect: When client disconnects (normal codes 1000/1001
@@ -338,7 +350,13 @@ async def _process_media_stream(
         logger.info(f"[{call_connection_id}]🚀 Starting media stream processing for call")
 
         try:
-            # Main message processing loop
+            # For MEDIA mode with adapter, use the adapter-based message loop
+            if stream_mode == StreamMode.MEDIA and hasattr(handler, '_transport_adapter') and handler._transport_adapter is not None:
+                await handler.run_with_adapter()
+                span.set_status(Status(StatusCode.OK))
+                return
+
+            # Legacy message loop for modes without adapter support
             message_count = 0
             while (
                 websocket.client_state == WebSocketState.CONNECTED

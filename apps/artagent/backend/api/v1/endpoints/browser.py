@@ -75,6 +75,7 @@ from apps.artagent.backend.voice import (
     VoiceHandlerConfig,
     pcm16le_rms,
 )
+from apps.artagent.backend.voice.transports import BrowserTransportAdapter
 from ..schemas.realtime import RealtimeStatusResponse
 
 logger = get_logger("api.v1.endpoints.browser")
@@ -252,7 +253,11 @@ async def browser_conversation_endpoint(
                         "stream_mode": str(stream_mode),
                     }
                 else:
-                    # Speech Cascade - use VoiceHandler factory
+                    # Speech Cascade - use VoiceHandler factory with transport adapter
+                    adapter = BrowserTransportAdapter(
+                        websocket=websocket,
+                        session_id=session_id,
+                    )
                     config = VoiceHandlerConfig(
                         session_id=session_id,
                         websocket=websocket,
@@ -260,6 +265,7 @@ async def browser_conversation_endpoint(
                         conn_id=conn_id,
                         user_email=user_email,
                         scenario=scenario,
+                        transport_adapter=adapter,
                     )
                     handler = await VoiceHandler.create(config, websocket.app.state)
                     memory_manager = handler.memory_manager

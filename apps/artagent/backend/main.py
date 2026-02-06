@@ -66,6 +66,7 @@ from lifecycle.steps import (
     register_external_services_step,
     register_mcp_servers_step,
     register_speech_pools_step,
+    register_transports_step,
     register_warmup_step,
 )
 from utils.ml_logging import get_logger
@@ -109,6 +110,7 @@ async def lifespan(app: FastAPI):
 
     # Register all startup steps (order matters)
     # Note: warmup and mcp are deferred - they run after yield
+    register_transports_step(manager, app)
     register_core_state_step(manager, app)
     register_speech_pools_step(manager, app)
     register_aoai_step(manager, app)

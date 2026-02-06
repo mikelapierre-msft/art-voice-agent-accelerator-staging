@@ -93,7 +93,6 @@ class TransportType(str, Enum):
 
     BROWSER = "browser"
     ACS = "acs"
-    VOICELIVE = "voicelive"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -220,11 +219,6 @@ class VoiceSessionContext:
     def is_browser(self) -> bool:
         """Check if using browser transport."""
         return self.transport == TransportType.BROWSER
-
-    @property
-    def is_voicelive(self) -> bool:
-        """Check if using VoiceLive transport."""
-        return self.transport == TransportType.VOICELIVE
 
     @property
     def current_agent(self) -> Any:

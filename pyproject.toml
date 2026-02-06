@@ -189,6 +189,12 @@ docs = [
 [project.scripts]
 artagent-server = "apps.artagent.backend.main:main"
 
+# Builtin transport plugins - discovered via registry.discover_plugins()
+# External plugins can register using the same entry-point group
+[project.entry-points."artagent.transports"]
+#acs = "apps.artagent.backend.voice.transports:ACSTransportAdapter"
+#browser = "apps.artagent.backend.voice.transports:BrowserTransportAdapter"
+
 # =============================================================================
 # uv Configuration
 # =============================================================================
