@@ -28,39 +28,19 @@ logger = get_logger("lifecycle.steps")
 
 
 def register_transports_step(manager: LifecycleManager, app: FastAPI) -> None:
-    """Register built-in transports and discover external plugins."""
+    """Store available transports in app.state.
+
+    Transport adapters and plugin routers are now registered at module level
+    in ``setup_middleware_and_routes()`` so that routes exist before Starlette
+    builds its middleware stack.  This lifecycle step only persists the list
+    on ``app.state`` for runtime use.
+    """
 
     async def start() -> None:
-        from apps.artagent.backend.registries.transportstore import (
-            discover_plugins,
-            register_transport,
-        )
-        from apps.artagent.backend.voice.transports import (
-            ACSTransportAdapter,
-            BrowserTransportAdapter,
-        )
-
-        # Register built-in transports
-        register_transport("acs", ACSTransportAdapter)
-        register_transport("browser", BrowserTransportAdapter)
-
-        # Discover external plugins via entry_points
-        discovered = discover_plugins()
-        if discovered:
-            logger.info(f"Discovered external transport plugins: {discovered}")
-
-        # Mount plugin-provided FastAPI routers onto the app
-        from apps.artagent.backend.registries.transportstore import get_plugin_routers
-
-        for plugin_router in get_plugin_routers():
-            app.include_router(plugin_router)
-            prefix = getattr(plugin_router, "prefix", "")
-            logger.info("Mounted transport plugin router: %s", prefix or "/")
-
-        # Store available transports in app.state
         from apps.artagent.backend.registries.transportstore import get_all_transports
 
         app.state.available_transports = list(get_all_transports().keys())
+        logger.info("Available transports: %s", app.state.available_transports)
 
     manager.add_step("transports", start)
 

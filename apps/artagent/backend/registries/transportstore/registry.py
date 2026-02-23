@@ -267,10 +267,22 @@ def discover_plugins() -> int:
         all_eps = entry_points()
         eps = all_eps.get("artagent.transports", [])
 
-    for ep in eps:
+    eps_list = list(eps)
+    logger.info(
+        "Transport plugin discovery: found %d entry point(s) in 'artagent.transports' group: %s",
+        len(eps_list),
+        [f"{ep.name}={ep.value}" for ep in eps_list],
+    )
+
+    for ep in eps_list:
         try:
-            logger.debug("Loading transport plugin: %s", ep.name)
+            logger.info("Loading transport plugin: name=%s, value=%s, group=%s", ep.name, ep.value, ep.group)
             adapter_cls = ep.load()
+            logger.info(
+                "Loaded transport plugin class: %s (has get_router=%s)",
+                adapter_cls,
+                hasattr(adapter_cls, "get_router"),
+            )
 
             # Extract metadata from adapter class
             input_rate = getattr(adapter_cls, "input_sample_rate", 16000)
@@ -295,12 +307,30 @@ def discover_plugins() -> int:
                 try:
                     plugin_router = adapter_cls.get_router()
                     _PLUGIN_ROUTERS.append(plugin_router)
-                    logger.info("Loaded router from transport plugin '%s'", ep.name)
+                    # Log all routes in the plugin router for debugging
+                    route_details = []
+                    for r in getattr(plugin_router, "routes", []):
+                        path = getattr(r, "path", "?")
+                        methods = getattr(r, "methods", None)
+                        name = getattr(r, "name", "?")
+                        route_type = type(r).__name__
+                        route_details.append(
+                            f"  {route_type}: {path} methods={methods} name={name}"
+                        )
+                    logger.info(
+                        "Loaded router from transport plugin '%s' "
+                        "(prefix=%s, %d route(s)):\n%s",
+                        ep.name,
+                        getattr(plugin_router, "prefix", ""),
+                        len(route_details),
+                        "\n".join(route_details) if route_details else "  (no routes)",
+                    )
                 except Exception as router_err:
                     logger.warning(
                         "Failed to load router from plugin '%s': %s",
                         ep.name,
                         router_err,
+                        exc_info=True,
                     )
 
             discovered += 1
