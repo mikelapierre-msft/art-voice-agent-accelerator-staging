@@ -72,6 +72,9 @@ from typing import TYPE_CHECKING, Any, Protocol
 if TYPE_CHECKING:
     from fastapi import WebSocket
 
+    from apps.artagent.backend.registries.transportstore.protocols import (
+        TransportAdapter,
+    )
     from apps.artagent.backend.voice.speech_cascade.handler import SpeechCascadeHandler
     from apps.artagent.backend.voice.speech_cascade.orchestrator import (
         CascadeOrchestratorAdapter,
@@ -93,6 +96,7 @@ class TransportType(str, Enum):
 
     BROWSER = "browser"
     ACS = "acs"
+    CUSTOM = "custom"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -185,6 +189,9 @@ class VoiceSessionContext:
 
     # ─── Barge-In ───
     barge_in_controller: BargeInController | None = None
+
+    # ─── Transport Adapter (for custom/plugin transports) ───
+    transport_adapter: TransportAdapter | None = None
 
     # ─── Task Management ───
     orchestration_tasks: set = field(default_factory=set)

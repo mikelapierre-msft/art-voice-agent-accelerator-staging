@@ -282,9 +282,17 @@ class TTSPlayback:
                 voice_rate=voice_rate,
                 on_first_audio=on_first_audio,
             )
-        else:
+        elif transport.value == "acs":
             # ACS and VoiceLive both use ACS format
             return await self.play_to_acs(
+                text,
+                voice_name=voice_name,
+                voice_style=voice_style,
+                voice_rate=voice_rate,
+                on_first_audio=on_first_audio,
+            )
+        elif transport.value == "custom":
+            return await self.play_to_custom(
                 text,
                 voice_name=voice_name,
                 voice_style=voice_style,
@@ -693,6 +701,209 @@ class TTSPlayback:
 
         logger.info(
             "[%s] ACS stream COMPLETE: %d chunks sent, %d bytes total (run=%s)",
+            self._session_short,
+            chunks_sent,
+            len(pcm_bytes),
+            run_id,
+        )
+        return True
+
+    async def play_to_custom(
+        self,
+        text: str,
+        *,
+        voice_name: str | None = None,
+        voice_style: str | None = None,
+        voice_rate: str | None = None,
+        blocking: bool = False,
+        on_first_audio: Callable[[], None] | None = None,
+    ) -> bool:
+        """Play TTS audio via a custom transport adapter.
+
+        Synthesises PCM16 audio at 16 kHz (same pipeline as ACS) and streams
+        it through ``adapter.send_audio()`` in 1280-byte chunks (40 ms).  The
+        adapter is responsible for codec conversion and wire framing — e.g. the
+        Genesys adapter converts to µ-law 8 kHz and sends binary WebSocket
+        frames.
+
+        Args:
+            text: Text to synthesize.
+            voice_name: Override voice (uses agent voice if not provided).
+            voice_style: Override style.
+            voice_rate: Override rate.
+            blocking: Whether to pace audio for real-time playback.
+            on_first_audio: Callback when first audio chunk is sent.
+
+        Returns:
+            True if playback completed, False if cancelled or failed.
+        """
+        adapter = self._context.transport_adapter
+        if adapter is None:
+            logger.error(
+                "[%s] Custom transport has no adapter, cannot play text",
+                self._session_short,
+            )
+            return False
+
+        if not text or not text.strip():
+            logger.warning("[%s] Custom TTS: empty text, skipping", self._session_short)
+            return False
+
+        run_id = uuid.uuid4().hex[:8]
+
+        # Resolve voice from agent if not provided
+        if not voice_name:
+            voice_name, voice_style, voice_rate = self.get_agent_voice()
+
+        style = voice_style or "conversational"
+        rate = voice_rate or "medium"
+
+        logger.info(
+            "[%s] Custom TTS START: text='%s...' voice=%s style=%s rate=%s blocking=%s (run=%s)",
+            self._session_short,
+            text[:50],
+            voice_name,
+            style,
+            rate,
+            blocking,
+            run_id,
+        )
+
+        async with self._tts_lock:
+            if self._cancel_event.is_set():
+                self._cancel_event.clear()
+                return False
+
+            self._is_playing = True
+            try:
+                # Acquire TTS synthesizer from pool
+                synth, tier = await self._app_state.tts_pool.acquire_for_session(
+                    self._session_id
+                )
+
+                if not synth or not getattr(synth, "is_ready", False):
+                    logger.error(
+                        "[%s] TTS synthesizer not initialized (missing speech config)",
+                        self._session_short,
+                    )
+                    return False
+
+                # Synthesize audio at 16 kHz (adapter handles conversion)
+                pcm_bytes = await self._synthesize(
+                    synth, text, voice_name, style, rate, SAMPLE_RATE_ACS
+                )
+
+                if not pcm_bytes:
+                    logger.error(
+                        "[%s] Custom TTS returned empty audio", self._session_short
+                    )
+                    return False
+
+                logger.info(
+                    "[%s] Custom TTS: synthesis OK, %d bytes, streaming via adapter",
+                    self._session_short,
+                    len(pcm_bytes),
+                )
+
+                # Stream chunks through the adapter
+                result = await self._stream_to_adapter(
+                    adapter, pcm_bytes, blocking, on_first_audio, run_id
+                )
+                logger.info(
+                    "[%s] Custom TTS: stream complete, result=%s",
+                    self._session_short,
+                    result,
+                )
+                return result
+
+            except asyncio.CancelledError:
+                logger.debug("[%s] Custom TTS cancelled", self._session_short)
+                return False
+            except Exception as e:
+                logger.error("[%s] Custom TTS failed: %s", self._session_short, e)
+                return False
+            finally:
+                self._is_playing = False
+
+    async def _stream_to_adapter(
+        self,
+        adapter: Any,
+        pcm_bytes: bytes,
+        blocking: bool,
+        on_first_audio: Callable[[], None] | None,
+        run_id: str,
+    ) -> bool:
+        """Stream PCM16 audio chunks to a transport adapter.
+
+        Mirrors ``_stream_to_acs`` but delegates wire encoding to the adapter
+        via its ``send_audio(pcm16_bytes)`` contract.  The adapter handles
+        codec conversion (e.g. PCM16 → µ-law) and wire framing (e.g. binary
+        WebSocket frames) internally.
+
+        Args:
+            adapter: TransportAdapter with ``send_audio`` method.
+            pcm_bytes: Raw PCM16 audio at 16 kHz.
+            blocking: If True, pace at 40 ms per chunk for real-time playback.
+            on_first_audio: Callback fired after the first chunk is sent.
+            run_id: Logging correlation ID.
+
+        Returns:
+            True if all chunks were sent, False if cancelled or failed.
+        """
+        chunk_size = 1280  # 40 ms at 16 kHz mono 16-bit
+        first_sent = False
+        chunks_sent = 0
+        total_chunks = (len(pcm_bytes) + chunk_size - 1) // chunk_size
+
+        logger.info(
+            "[%s] Adapter stream START: %d bytes, %d chunks (run=%s)",
+            self._session_short,
+            len(pcm_bytes),
+            total_chunks,
+            run_id,
+        )
+
+        for i in range(0, len(pcm_bytes), chunk_size):
+            if self._cancel_event.is_set():
+                self._cancel_event.clear()
+                logger.debug("[%s] Adapter stream cancelled", self._session_short)
+                return False
+
+            chunk = pcm_bytes[i : i + chunk_size]
+
+            try:
+                await adapter.send_audio(chunk)
+                chunks_sent += 1
+
+                if chunks_sent == 1:
+                    logger.info(
+                        "[%s] Adapter stream: first chunk sent", self._session_short
+                    )
+            except Exception as e:
+                logger.error(
+                    "[%s] Adapter stream ERROR sending chunk %d/%d: %s",
+                    self._session_short,
+                    chunks_sent + 1,
+                    total_chunks,
+                    e,
+                )
+                return False
+
+            if not first_sent:
+                first_sent = True
+                if on_first_audio:
+                    try:
+                        on_first_audio()
+                    except Exception:
+                        pass
+
+            if blocking:
+                await asyncio.sleep(0.04)  # 40 ms pacing
+            else:
+                await asyncio.sleep(0)  # yield to event loop
+
+        logger.info(
+            "[%s] Adapter stream COMPLETE: %d chunks, %d bytes (run=%s)",
             self._session_short,
             chunks_sent,
             len(pcm_bytes),

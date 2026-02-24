@@ -367,6 +367,10 @@ class VoiceHandler:
         # Set websocket (private field)
         context._websocket = config.websocket
 
+        # Set transport adapter on context (for custom transport TTS playback)
+        if config.transport_adapter is not None:
+            context.transport_adapter = config.transport_adapter
+
         # Create handler
         handler = cls(context, app_state, config=config)
         handler._orchestration_tasks = orchestration_tasks
