@@ -850,7 +850,7 @@ class TTSPlayback:
         Returns:
             True if all chunks were sent, False if cancelled or failed.
         """
-        chunk_size = 1280  # 40 ms at 16 kHz mono 16-bit
+        chunk_size = 12800  # Increase chunk size for better performance
         first_sent = False
         chunks_sent = 0
         total_chunks = (len(pcm_bytes) + chunk_size - 1) // chunk_size

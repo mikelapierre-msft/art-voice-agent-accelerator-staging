@@ -265,20 +265,22 @@ def setup_middleware_and_routes(app: FastAPI) -> None:
                 # Trace ASGI messages for debugging
                 async def ws_send_wrapper(message):
                     logger.info(
-                        "[request-logger] WS %s SEND type=%s code=%s reason=%s",
+                        "[request-logger] WS %s SEND type=%s code=%s reason=%s text=%s",
                         path,
                         message.get("type"),
                         message.get("code", "n/a"),
-                        message.get("reason", "n/a")
+                        message.get("reason", "n/a"),
+                        message.get("text", "n/a")
                     )
                     await send(message)
 
                 async def ws_receive_wrapper():
                     message = await receive()
                     logger.info(
-                        "[request-logger] WS %s RECV type=%s",
+                        "[request-logger] WS %s RECV type=%s text=%s",
                         path,
                         message.get("type"),
+                        message.get("text", "n/a")
                     )
                     return message
 

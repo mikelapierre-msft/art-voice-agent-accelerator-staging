@@ -280,6 +280,10 @@ async def send_session_envelope(
     if the connection manager is inaccessible.
     """
 
+    if getattr(ws.state, "disable_events", False):
+        logger.info("Skipping send_session_envelope for message=%s", envelope)
+        return
+
     manager = getattr(ws.app.state, "conn_manager", None)
     resolved_conn_id = conn_id or getattr(ws.state, "conn_id", None)
     resolved_session_id = session_id or getattr(ws.state, "session_id", None)

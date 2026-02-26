@@ -39,6 +39,11 @@ async def _emit(
 
     IMPORTANT: Tool frames are now session-aware to prevent cross-session leakage.
     """
+
+    if getattr(ws.state, "disable_events", False):
+        logger.info("Skipping _emit for message=%s", payload)
+        return
+
     if is_acs:
         # Use session-aware broadcasting for ACS calls
         if hasattr(ws.app.state, "conn_manager"):
